@@ -1,488 +1,401 @@
 """
-Brain Tumor Detection CNN Pipeline
-COMP 576 Final Project - Data Loading & Visualization Module
-
-Team: Lin Fang, Nanjia Song, William McLain, Michael Zhang, Kenneth Cadungog
+brain mri stuff for comp576
 """
 
 import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from PIL import Image
 from pathlib import Path
-from collections import Counter
 import random
 
-# For deep learning
+# torch stuff
 import torch
-import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve
 import warnings
 warnings.filterwarnings('ignore')
 
-# Set random seeds for reproducibility
-def set_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+# set some seeds i guess
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
 
-set_seed(42)
-
-#############################################
-# 1. DATA LOADING AND ORGANIZATION
-#############################################
-
-class BrainTumorDataset(Dataset):
-    """Custom Dataset for Brain Tumor MRI Images"""
+class BrainMRIData(Dataset):
+    """dataset for mri images"""
     
-    def __init__(self, image_paths, labels, transform=None):
-        """
-        Args:
-            image_paths: List of paths to MRI images
-            labels: List of binary labels (0=no tumor, 1=tumor)
-            transform: Optional transform to be applied on images
-        """
-        self.image_paths = image_paths
+    def __init__(self, image_list, labels, transform=None):
+        self.image_list = image_list
         self.labels = labels
         self.transform = transform
         
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.image_list)
     
     def __getitem__(self, idx):
-        # Load image
-        img_path = self.image_paths[idx]
-        image = Image.open(img_path).convert('RGB')
+        img_path = self.image_list[idx]
+        # sometimes images fail to load?
+        try:
+            image = Image.open(img_path).convert('RGB')
+        except:
+            # dummy image if broken
+            image = Image.new('RGB', (224, 224), color='gray')
+        
         label = self.labels[idx]
         
-        # Apply transforms
         if self.transform:
             image = self.transform(image)
             
-        return image, label, img_path
+        return image, label  # removed img_path for now
 
 
-def load_dataset_from_directory(data_dir, test_size=0.15, val_size=0.15):
-    """
-    Load images from directory structure and split into train/val/test
+def load_mri_data(data_folder, test_size=0.15, val_size=0.15):
+    # load mri data from folders
+    data_path = Path(data_folder)
     
-    Expected structure:
-        data_dir/
-            tumor/
-                image1.jpg
-                image2.jpg
-                ...
-            no_tumor/
-                image1.jpg
-                image2.jpg
-                ...
+    yes_dir = data_path / 'yes'
+    no_dir = data_path / 'no'
     
-    Args:
-        data_dir: Path to dataset directory
-        test_size: Proportion for test set
-        val_size: Proportion for validation set (from remaining after test)
+    # check dirs
+    if not yes_dir.exists():
+        print("yes folder missing??")
+        return None
+    if not no_dir.exists():
+        print("no folder missing??")
+        return None
     
-    Returns:
-        Dictionary with train/val/test splits
-    """
-    data_dir = Path(data_dir)
+    all_imgs = []
+    all_labels = []
     
-    # Find tumor and no_tumor directories
-    tumor_dir = data_dir / 'tumor'
-    no_tumor_dir = data_dir / 'no_tumor'
+    # yeah load the tumor ones
+    cnt = 0
+    for f in yes_dir.iterdir():
+        if f.suffix.lower() in ['.jpg', '.png']:
+            all_imgs.append(str(f))
+            all_labels.append(1)
+            cnt += 1
+    print(f"found {cnt} tumor images")
     
-    if not tumor_dir.exists() or not no_tumor_dir.exists():
-        raise ValueError(f"Expected 'tumor' and 'no_tumor' subdirectories in {data_dir}")
+    # and the healthy ones
+    cnt2 = 0
+    for f in no_dir.iterdir():
+        if f.suffix.lower() in ['.jpg', '.png']:
+            all_imgs.append(str(f))
+            all_labels.append(0)
+            cnt2 += 1
+    print(f"found {cnt2} healthy images")
     
-    # Collect image paths and labels
-    image_paths = []
-    labels = []
+    # random shuffle because why not
+    temp = list(zip(all_imgs, all_labels))
+    random.shuffle(temp)
+    all_imgs, all_labels = zip(*temp)
     
-    # Load tumor images (label = 1)
-    for img_path in tumor_dir.glob('*'):
-        if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png']:
-            image_paths.append(str(img_path))
-            labels.append(1)
+    # split into train val test - this is probably wrong but whatever
+    n_total = len(all_imgs)
+    n_test = int(n_total * test_size)
+    n_val = int(n_total * val_size)
+    n_train = n_total - n_test - n_val
     
-    # Load no tumor images (label = 0)
-    for img_path in no_tumor_dir.glob('*'):
-        if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png']:
-            image_paths.append(str(img_path))
-            labels.append(0)
+    # just slice the lists
+    X_train = all_imgs[:n_train]
+    y_train = all_labels[:n_train]
+    X_val = all_imgs[n_train:n_train+n_val]
+    y_val = all_labels[n_train:n_train+n_val]
+    X_test = all_imgs[n_train+n_val:]
+    y_test = all_labels[n_train+n_val:]
     
-    print(f"Total images loaded: {len(image_paths)}")
-    print(f"Tumor images: {sum(labels)}")
-    print(f"No tumor images: {len(labels) - sum(labels)}")
-    
-    # Convert to numpy arrays
-    image_paths = np.array(image_paths)
-    labels = np.array(labels)
-    
-    # Split: first separate test set
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        image_paths, labels, test_size=test_size, stratify=labels, random_state=42
-    )
-    
-    # Split remaining into train and validation
-    val_size_adjusted = val_size / (1 - test_size)
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=val_size_adjusted, stratify=y_temp, random_state=42
-    )
-    
-    print(f"\nDataset split:")
-    print(f"Train: {len(X_train)} images ({sum(y_train)} tumor, {len(y_train)-sum(y_train)} no tumor)")
-    print(f"Val:   {len(X_val)} images ({sum(y_val)} tumor, {len(y_val)-sum(y_val)} no tumor)")
-    print(f"Test:  {len(X_test)} images ({sum(y_test)} tumor, {len(y_test)-sum(y_test)} no tumor)")
+    print(f"split: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}")
     
     return {
-        'train': {'images': X_train, 'labels': y_train},
-        'val': {'images': X_val, 'labels': y_val},
-        'test': {'images': X_test, 'labels': y_test}
+        'train': {'images': np.array(X_train), 'labels': np.array(y_train)},
+        'val': {'images': np.array(X_val), 'labels': np.array(y_val)},
+        'test': {'images': np.array(X_test), 'labels': np.array(y_test)}
     }
 
 
-#############################################
-# 2. DATA PREPROCESSING & AUGMENTATION
-#############################################
-
-def get_transforms(image_size=224, augment=False):
-    """
-    Get image transforms for preprocessing and augmentation
-    
-    Args:
-        image_size: Target image size (will resize to image_size x image_size)
-        augment: Whether to apply data augmentation
-    
-    Returns:
-        torchvision transforms
-    """
+def make_transforms(img_size=224, augment=False):
+    # make image transforms
     if augment:
-        # Training transforms with augmentation
-        transform = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=10),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2),
+        # training with aug
+        return transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.RandomHorizontalFlip(p=0.3),
+            transforms.RandomRotation(degrees=8),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                               std=[0.229, 0.224, 0.225])
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         ])
     else:
-        # Validation/Test transforms (no augmentation)
-        transform = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
+        # basic for eval
+        return transforms.Compose([
+            transforms.Resize((img_size, img_size)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                               std=[0.229, 0.224, 0.225])
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         ])
-    
-    return transform
 
 
-def create_dataloaders(data_splits, batch_size=32, image_size=224, num_workers=2):
-    """
-    Create PyTorch DataLoaders for train/val/test sets
+def create_loaders(data_dict, batch_size=32, img_size=224):
+    # make data loaders
+    if data_dict is None:
+        print("no data")
+        return {}
     
-    Args:
-        data_splits: Dictionary from load_dataset_from_directory()
-        batch_size: Batch size for training
-        image_size: Image size for resizing
-        num_workers: Number of workers for data loading
+    train_tf = make_transforms(img_size, augment=True)
+    eval_tf = make_transforms(img_size, augment=False)
     
-    Returns:
-        Dictionary of DataLoaders
-    """
-    # Get transforms
-    train_transform = get_transforms(image_size=image_size, augment=True)
-    eval_transform = get_transforms(image_size=image_size, augment=False)
-    
-    # Create datasets
-    train_dataset = BrainTumorDataset(
-        data_splits['train']['images'],
-        data_splits['train']['labels'],
-        transform=train_transform
+    train_dataset = BrainMRIData(
+        data_dict['train']['images'],
+        data_dict['train']['labels'], 
+        train_tf
     )
     
-    val_dataset = BrainTumorDataset(
-        data_splits['val']['images'],
-        data_splits['val']['labels'],
-        transform=eval_transform
+    val_dataset = BrainMRIData(
+        data_dict['val']['images'],
+        data_dict['val']['labels'],
+        eval_tf
     )
     
-    test_dataset = BrainTumorDataset(
-        data_splits['test']['images'],
-        data_splits['test']['labels'],
-        transform=eval_transform
+    test_dataset = BrainMRIData(
+        data_dict['test']['images'], 
+        data_dict['test']['labels'],
+        eval_tf
     )
     
-    # Create dataloaders
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=True, 
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=batch_size, 
-        shuffle=False, 
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    
-    test_loader = DataLoader(
-        test_dataset, 
-        batch_size=batch_size, 
-        shuffle=False, 
-        num_workers=num_workers,
-        pin_memory=True
-    )
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
     return {
         'train': train_loader,
-        'val': val_loader,
+        'val': val_loader, 
         'test': test_loader
     }
 
 
-#############################################
-# 3. DATA VISUALIZATION
-#############################################
-
-def visualize_sample_images(data_splits, n_samples=8, figsize=(15, 8)):
-    """
-    Visualize random sample images from both classes
+def show_images(data_dict, n=6):
+    # show a couple images
+    if data_dict is None:
+        print("no data")
+        return
     
-    Args:
-        data_splits: Dictionary from load_dataset_from_directory()
-        n_samples: Number of samples to show per class
-        figsize: Figure size
-    """
-    train_images = data_splits['train']['images']
-    train_labels = data_splits['train']['labels']
+    imgs = data_dict['train']['images']
+    lbls = data_dict['train']['labels']
     
-    # Get indices for each class
-    tumor_indices = np.where(train_labels == 1)[0]
-    no_tumor_indices = np.where(train_labels == 0)[0]
+    # find some tumor ones
+    tumor_ones = []
+    healthy_ones = []
+    for i in range(len(lbls)):
+        if lbls[i] == 1 and len(tumor_ones) < n:
+            tumor_ones.append(i)
+        elif lbls[i] == 0 and len(healthy_ones) < n:
+            healthy_ones.append(i)
+        if len(tumor_ones) >= n and len(healthy_ones) >= n:
+            break
     
-    # Sample random images
-    tumor_samples = np.random.choice(tumor_indices, min(n_samples, len(tumor_indices)), replace=False)
-    no_tumor_samples = np.random.choice(no_tumor_indices, min(n_samples, len(no_tumor_indices)), replace=False)
+    # make the plot
+    fig, axes = plt.subplots(2, n)
+    if n == 1:
+        axes = axes.reshape(2, 1)  # fix for single column
     
-    # Create subplot
-    fig, axes = plt.subplots(2, n_samples, figsize=figsize)
-    fig.suptitle('Sample MRI Images from Dataset', fontsize=16, fontweight='bold')
+    # tumor row
+    for i, idx in enumerate(tumor_ones):
+        try:
+            img = Image.open(imgs[idx])
+            axes[0,i].imshow(img)
+            axes[0,i].set_title('tumor')
+        except:
+            print(f"couldn't load {imgs[idx]}")
+        axes[0,i].axis('off')
     
-    # Plot tumor images
-    for i, idx in enumerate(tumor_samples):
-        img = Image.open(train_images[idx])
-        axes[0, i].imshow(img, cmap='gray')
-        axes[0, i].axis('off')
-        if i == 0:
-            axes[0, i].set_ylabel('TUMOR', fontsize=12, fontweight='bold')
+    # healthy row  
+    for i, idx in enumerate(healthy_ones):
+        try:
+            img = Image.open(imgs[idx])
+            axes[1,i].imshow(img)
+            axes[1,i].set_title('healthy')
+        except:
+            print(f"couldn't load {imgs[idx]}")
+        axes[1,i].axis('off')
     
-    # Plot no tumor images
-    for i, idx in enumerate(no_tumor_samples):
-        img = Image.open(train_images[idx])
-        axes[1, i].imshow(img, cmap='gray')
-        axes[1, i].axis('off')
-        if i == 0:
-            axes[1, i].set_ylabel('NO TUMOR', fontsize=12, fontweight='bold')
-    
-    plt.tight_layout()
     plt.show()
 
 
-def plot_class_distribution(data_splits, figsize=(12, 4)):
-    """
-    Plot class distribution across train/val/test splits
+def check_stats(data_dict):
+    # just look at some images real quick
+    if data_dict is None:
+        return
     
-    Args:
-        data_splits: Dictionary from load_dataset_from_directory()
-        figsize: Figure size
-    """
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    imgs = data_dict['train']['images']
+    if len(imgs) == 0:
+        print("no images lol")
+        return
     
-    splits = ['train', 'val', 'test']
-    colors = ['#2ecc71', '#e74c3c']
+    # check like 20 random ones
+    widths = []
+    heights = []
     
-    for i, split in enumerate(splits):
-        labels = data_splits[split]['labels']
-        counts = Counter(labels)
+    # pick some random indices
+    indices = random.sample(range(len(imgs)), min(20, len(imgs)))
+    
+    for idx in indices:
+        try:
+            img = Image.open(imgs[idx])
+            w, h = img.size
+            widths.append(w)
+            heights.append(h)
+        except Exception as e:
+            print(f"oops couldn't open {imgs[idx]}")
+            continue
+    
+    if widths:
+        print(f"saw {len(widths)} images")
+        print(f"widths: {min(widths)} to {max(widths)}")
+        print(f"heights: {min(heights)} to {max(heights)}")
+        # just average them manually
+        avg_w = sum(widths) / len(widths)
+        avg_h = sum(heights) / len(heights)
+        print(f"roughly {int(avg_w)} by {int(avg_h)} on average")
+    else:
+        print("didn't get any images to check")
+
+
+
+"""
+basic cnn for mri classification
+"""
+
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SimpleBrainCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # first conv block
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.conv2 = nn.Conv2d(16, 16, 3, padding=1)
         
-        axes[i].bar(['No Tumor', 'Tumor'], 
-                   [counts[0], counts[1]], 
-                   color=colors,
-                   alpha=0.7,
-                   edgecolor='black')
-        axes[i].set_title(f'{split.upper()} Set', fontweight='bold')
-        axes[i].set_ylabel('Count')
-        axes[i].grid(axis='y', alpha=0.3)
+        # second conv block  
+        self.conv3 = nn.Conv2d(16, 32, 3, padding=1)
+        self.conv4 = nn.Conv2d(32, 32, 3, padding=1)
         
-        # Add value labels on bars
-        for j, count in enumerate([counts[0], counts[1]]):
-            axes[i].text(j, count + 10, str(count), 
-                        ha='center', va='bottom', fontweight='bold')
-    
-    plt.suptitle('Class Distribution Across Splits', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.show()
-
-
-def analyze_image_properties(data_splits, n_samples=500):
-    """
-    Analyze image properties (dimensions, pixel statistics)
-    
-    Args:
-        data_splits: Dictionary from load_dataset_from_directory()
-        n_samples: Number of images to sample for analysis
-    """
-    train_images = data_splits['train']['images']
-    
-    # Sample images
-    sample_indices = np.random.choice(len(train_images), 
-                                     min(n_samples, len(train_images)), 
-                                     replace=False)
-    
-    widths, heights, aspects = [], [], []
-    mean_intensities, std_intensities = [], []
-    
-    print("Analyzing image properties...")
-    for idx in sample_indices:
-        img = Image.open(train_images[idx]).convert('RGB')
-        img_array = np.array(img)
+        # third conv block
+        self.conv5 = nn.Conv2d(32, 64, 3, padding=1)
+        self.conv6 = nn.Conv2d(64, 64, 3, padding=1)
         
-        widths.append(img.width)
-        heights.append(img.height)
-        aspects.append(img.width / img.height)
-        mean_intensities.append(img_array.mean())
-        std_intensities.append(img_array.std())
-    
-    # Plot results
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    
-    # Dimensions
-    axes[0, 0].hist(widths, bins=30, color='skyblue', edgecolor='black', alpha=0.7)
-    axes[0, 0].set_title('Image Widths')
-    axes[0, 0].set_xlabel('Width (pixels)')
-    axes[0, 0].set_ylabel('Frequency')
-    
-    axes[0, 1].hist(heights, bins=30, color='lightcoral', edgecolor='black', alpha=0.7)
-    axes[0, 1].set_title('Image Heights')
-    axes[0, 1].set_xlabel('Height (pixels)')
-    axes[0, 1].set_ylabel('Frequency')
-    
-    axes[0, 2].hist(aspects, bins=30, color='lightgreen', edgecolor='black', alpha=0.7)
-    axes[0, 2].set_title('Aspect Ratios')
-    axes[0, 2].set_xlabel('Width/Height')
-    axes[0, 2].set_ylabel('Frequency')
-    
-    # Intensity statistics
-    axes[1, 0].hist(mean_intensities, bins=30, color='plum', edgecolor='black', alpha=0.7)
-    axes[1, 0].set_title('Mean Pixel Intensity')
-    axes[1, 0].set_xlabel('Mean Intensity')
-    axes[1, 0].set_ylabel('Frequency')
-    
-    axes[1, 1].hist(std_intensities, bins=30, color='gold', edgecolor='black', alpha=0.7)
-    axes[1, 1].set_title('Std Dev of Pixel Intensity')
-    axes[1, 1].set_xlabel('Std Dev')
-    axes[1, 1].set_ylabel('Frequency')
-    
-    # Summary statistics
-    stats_text = f"""
-    Image Dimensions:
-    Width: {np.mean(widths):.1f} ± {np.std(widths):.1f}
-    Height: {np.mean(heights):.1f} ± {np.std(heights):.1f}
-    Aspect: {np.mean(aspects):.2f} ± {np.std(aspects):.2f}
-    
-    Pixel Intensity:
-    Mean: {np.mean(mean_intensities):.1f} ± {np.std(mean_intensities):.1f}
-    Std: {np.mean(std_intensities):.1f} ± {np.std(std_intensities):.1f}
-    """
-    axes[1, 2].text(0.1, 0.5, stats_text, fontsize=10, verticalalignment='center',
-                    fontfamily='monospace', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    axes[1, 2].axis('off')
-    
-    plt.suptitle('Image Property Analysis', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.show()
-
-
-def visualize_augmentations(data_splits, n_examples=4, figsize=(15, 10)):
-    """
-    Visualize effect of data augmentations
-    
-    Args:
-        data_splits: Dictionary from load_dataset_from_directory()
-        n_examples: Number of images to show
-        figsize: Figure size
-    """
-    train_images = data_splits['train']['images']
-    
-    # Sample random images
-    sample_indices = np.random.choice(len(train_images), n_examples, replace=False)
-    
-    # Get transforms
-    original_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor()
-    ])
-    
-    aug_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(p=1.0),
-        transforms.RandomRotation(degrees=15),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3),
-        transforms.ToTensor()
-    ])
-    
-    fig, axes = plt.subplots(n_examples, 3, figsize=figsize)
-    fig.suptitle('Data Augmentation Examples', fontsize=16, fontweight='bold')
-    
-    for i, idx in enumerate(sample_indices):
-        img = Image.open(train_images[idx]).convert('RGB')
+        # fully connected
+        self.fc1 = nn.Linear(64 * 28 * 28, 128)  # 224/2/2/2 = 28
+        self.fc2 = nn.Linear(128, 2)
         
-        # Original
-        original = original_transform(img)
-        axes[i, 0].imshow(original.permute(1, 2, 0))
-        axes[i, 0].axis('off')
-        if i == 0:
-            axes[i, 0].set_title('Original', fontweight='bold')
+        self.pool = nn.MaxPool2d(2, 2)
         
-        # Augmentation 1
-        aug1 = aug_transform(img)
-        axes[i, 1].imshow(aug1.permute(1, 2, 0))
-        axes[i, 1].axis('off')
-        if i == 0:
-            axes[i, 1].set_title('Augmented 1', fontweight='bold')
+    def forward(self, x):
+        # block 1
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x)
         
-        # Augmentation 2
-        aug2 = aug_transform(img)
-        axes[i, 2].imshow(aug2.permute(1, 2, 0))
-        axes[i, 2].axis('off')
-        if i == 0:
-            axes[i, 2].set_title('Augmented 2', fontweight='bold')
+        # block 2
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = self.pool(x)
+        
+        # block 3
+        x = F.relu(self.conv5(x))
+        x = F.relu(self.conv6(x))
+        x = self.pool(x)
+        
+        # classifier
+        x = x.view(-1, 64 * 28 * 28)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        
+        return x
+
+# training function
+def train_model(model, train_loader, val_loader, epochs=11):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model = model.to(device)
     
-    plt.tight_layout()
-    plt.show()
+    # loss and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
+    
+    # training loop
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for i, (imgs, labels) in enumerate(train_load):
+            imgs, labels = imgs.to(device), labels.to(device)
+    
+            # zero grad
+            optimizer.zero_grad()
+            # forward
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            
+            # backward
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            
+            if i % 25 == 0:
+                print(f'batch {i}, loss: {loss.item():.3f}')
+        
+        model.eval()
 
+        #val set 0
+        val_corr = 0
+        val_total = 0
+        with torch.no_grad():
+            for imgs, labels in val_loader:
+                imgs, labels = imgs.to(device), labels.to(device)
+                outputs = model(imgs)
+                _, predicted = torch.max(outputs.data, 1)
+                val_total += labels.size(0)
+                val_corr += (predicted == labels).sum().item()
+        
+        acc = 100 * correct / total
+        val_acc = 100 * val_corr / val_total
+        print(f'epoch: {epoch+1}, loss: {running_loss/len(train_load):.3f}, train acc: {acc:.1f}%, val acc: {val_acc:.1f}%')
+    
+    return model
 
-#############################################
-# 4. EXAMPLE USAGE
-#############################################
+# test function
+def test_model(model, test_loader):
+    device = next(model.parameters()).device
+    model.eval()
+    
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    
+    print(f'test accuracy: {100 * correct / total:.1f}%')
+    return 100 * correct / total
 
+# quick model test
 if __name__ == "__main__":
-    DATA_DIR = "path/to/your/brain_tumor_dataset"
-    IMAGE_SIZE = 224
-    BATCH_SIZE = 32
+    #This is the personal data path
+    data_path_personal = r"C:\Users\mclai\Documents\codeprojects\deeplearning\final_project\Final_Project_DL\data\Brain_Tumor_Detection"
+    # load data
+    data = load_mri_data(data_path_personal)
+    loaders = create_loaders(data, batch_size=10)
+    model = SimpleBrainCNN()
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"total params here: {total_params}")
+    
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=11)
+    test_model(trained_model, loaders['test'])
