@@ -328,7 +328,7 @@ def train_model(model, train_loader, val_loader, epochs=11):
         correct = 0
         total = 0
         
-        for i, (imgs, labels) in enumerate(train_load):
+        for i, (imgs, labels) in enumerate(train_loader):
             imgs, labels = imgs.to(device), labels.to(device)
     
             # zero grad
@@ -364,7 +364,7 @@ def train_model(model, train_loader, val_loader, epochs=11):
         
         acc = 100 * correct / total
         val_acc = 100 * val_corr / val_total
-        print(f'epoch: {epoch+1}, loss: {running_loss/len(train_load):.3f}, train acc: {acc:.1f}%, val acc: {val_acc:.1f}%')
+        print(f'epoch: {epoch+1}, loss: {running_loss/len(train_loader):.3f}, train acc: {acc:.1f}%, val acc: {val_acc:.1f}%')
     
     return model
 
