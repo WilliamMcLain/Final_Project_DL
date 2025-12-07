@@ -1,5 +1,5 @@
 """
-brain mri stuff for comp576
+brain mri stuff for comp576 with PCA dimensionality reduction
 """
 
 import os
@@ -259,6 +259,264 @@ def check_stats(data_dict):
         print("didn't get any images to check")
 
 
+"""
+PCA Dimensionality Reduction Analysis for Brain MRI Images
+"""
+
+def load_images_as_matrix(data_dict, img_size=64, max_images=None, grayscale=True):
+    """
+    Load images and convert to matrix format for PCA
+    Each row is a flattened image
+    
+    Args:
+        data_dict: Data dictionary from load_mri_data
+        img_size: Size to resize images to (creates square images)
+        max_images: Maximum number of images to load (None = all)
+        grayscale: Convert to grayscale (recommended for PCA)
+    
+    Returns:
+        image_matrix: (n_images, n_pixels) matrix
+        labels: corresponding labels
+    """
+    print(f"\nLoading images for PCA analysis (size={img_size}x{img_size})...")
+    
+    imgs = data_dict['train']['images']
+    lbls = data_dict['train']['labels']
+    
+    if max_images is not None:
+        n_imgs = min(max_images, len(imgs))
+    else:
+        n_imgs = len(imgs)
+    
+    # Calculate matrix size
+    n_pixels = img_size * img_size
+    if not grayscale:
+        n_pixels *= 3  # RGB channels
+    
+    image_matrix = np.zeros((n_imgs, n_pixels))
+    labels = []
+    
+    for i in range(n_imgs):
+        try:
+            img = Image.open(imgs[i])
+            
+            # Convert to grayscale if requested
+            if grayscale:
+                img = img.convert('L')
+            else:
+                img = img.convert('RGB')
+            
+            # Resize
+            img = img.resize((img_size, img_size))
+            
+            # Flatten and store
+            img_array = np.array(img).flatten()
+            image_matrix[i] = img_array
+            labels.append(lbls[i])
+            
+            if (i + 1) % 50 == 0:
+                print(f"Loaded {i + 1}/{n_imgs} images")
+        except Exception as e:
+            print(f"Error loading image {i}: {e}")
+            continue
+    
+    print(f"Final matrix shape: {image_matrix.shape}")
+    return image_matrix, np.array(labels)
+
+
+def perform_pca_analysis(image_matrix, img_size=64):
+    """
+    Perform PCA analysis on image matrix
+    
+    Args:
+        image_matrix: (n_images, n_pixels) matrix
+        img_size: Original image size for reshaping
+    
+    Returns:
+        Dictionary with PCA results
+    """
+    print("\n" + "="*70)
+    print("PERFORMING PCA ANALYSIS")
+    print("="*70)
+    
+    num_images, num_pixels = image_matrix.shape
+    print(f"Analyzing {num_images} images with {num_pixels} pixels each")
+    
+    # Compute mean face
+    print("Computing mean image...")
+    mean_face = np.mean(image_matrix, axis=0)
+    centered_faces = image_matrix - mean_face
+    
+    # Compute covariance matrix
+    print("Computing covariance matrix...")
+    cov_matrix = (centered_faces.T @ centered_faces) / (num_images - 1)
+    
+    # Compute eigenvalues and eigenvectors
+    print("Computing eigenvalues and eigenvectors...")
+    eigenval, eigenvects = np.linalg.eigh(cov_matrix)
+    
+    # Sort in descending order
+    sortord = np.argsort(eigenval)[::-1]
+    eigenval = eigenval[sortord]
+    eigenvects = eigenvects[:, sortord]
+    
+    print(f"Total eigenvalues: {len(eigenval)}")
+    
+    # Compute variance explained
+    tot_var = np.sum(eigenval)
+    cum_var = np.cumsum(eigenval) / tot_var
+    
+    # Find components for 95% and 99% variance
+    components_95 = np.where(cum_var >= 0.95)[0][0] + 1
+    components_99 = np.where(cum_var >= 0.99)[0][0] + 1
+    
+    print("\n" + "="*70)
+    print("Variance Analysis Results:")
+    print("="*70)
+    print(f"95% variance retained with: {components_95} components")
+    print(f"Dimensionality reduction: {100*(1 - components_95/num_pixels):.1f}%")
+    print(f"\n99% variance retained with: {components_99} components")
+    print(f"Dimensionality reduction: {100*(1 - components_99/num_pixels):.1f}%")
+    print(f"\nOriginal dimensions: {num_pixels}")
+    print(f"Reduced dimensions (95%): {components_95}")
+    print(f"Reduced dimensions (99%): {components_99}")
+    print("="*70)
+    
+    return {
+        'eigenvalues': eigenval,
+        'eigenvectors': eigenvects,
+        'mean_face': mean_face,
+        'centered_faces': centered_faces,
+        'cum_variance': cum_var,
+        'components_95': components_95,
+        'components_99': components_99,
+        'img_size': img_size
+    }
+
+
+def plot_pca_results(pca_results, save_path='pca_analysis.png'):
+    """
+    Plot PCA analysis results
+    """
+    eigenval = pca_results['eigenvalues']
+    cum_var = pca_results['cum_variance']
+    components_95 = pca_results['components_95']
+    components_99 = pca_results['components_99']
+    
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    
+    # Plot eigenvalue spectrum
+    axes[0].plot(eigenval[:100], linewidth=2)
+    axes[0].axvline(x=components_95, color='r', linestyle='--', 
+                    label=f'95% variance ({components_95} components)')
+    axes[0].axvline(x=components_99, color='g', linestyle='--', 
+                    label=f'99% variance ({components_99} components)')
+    axes[0].set_xlabel('Principal Component Index', fontsize=12)
+    axes[0].set_ylabel('Eigenvalue', fontsize=12)
+    axes[0].set_title('Eigenvalue Spectrum (First 100 Components)', fontsize=14)
+    axes[0].grid(True, linestyle='--', alpha=0.7)
+    axes[0].legend()
+    
+    # Plot cumulative variance
+    axes[1].plot(cum_var[:100] * 100, linewidth=2)
+    axes[1].axhline(y=95, color='r', linestyle='--', label='95% threshold')
+    axes[1].axhline(y=99, color='g', linestyle='--', label='99% threshold')
+    axes[1].set_xlabel('Number of Components', fontsize=12)
+    axes[1].set_ylabel('Cumulative Variance Explained (%)', fontsize=12)
+    axes[1].set_title('Cumulative Variance Explained', fontsize=14)
+    axes[1].grid(True, linestyle='--', alpha=0.7)
+    axes[1].legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f"Saved eigenvalue plot to {save_path}")
+    plt.show()
+
+
+def plot_eigenfaces(pca_results, n_components=19, save_path='eigenfaces.png'):
+    """
+    Plot the mean face and top eigenfaces (principal components)
+    """
+    mean_face = pca_results['mean_face']
+    eigenvects = pca_results['eigenvectors']
+    img_size = pca_results['img_size']
+    
+    fig, axes = plt.subplots(4, 5, figsize=(15, 12))
+    axes = axes.flatten()
+    
+    # Plot mean face first
+    mean_img = mean_face.reshape(img_size, img_size)
+    axes[0].imshow(mean_img, cmap='gray')
+    axes[0].set_title('Mean Brain MRI', fontsize=10, fontweight='bold')
+    axes[0].axis('off')
+    
+    # Plot eigenfaces
+    for i in range(min(n_components, 19)):
+        eigenface = eigenvects[:, i].reshape(img_size, img_size)
+        # Normalize for visualization
+        eigenface_norm = (eigenface - eigenface.min()) / (eigenface.max() - eigenface.min())
+        
+        axes[i + 1].imshow(eigenface_norm, cmap='gray')
+        axes[i + 1].set_title(f'PC {i+1}', fontsize=10)
+        axes[i + 1].axis('off')
+    
+    plt.suptitle('Principal Components of Brain MRI Images', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f"Saved eigenfaces plot to {save_path}")
+    plt.show()
+
+
+def reconstruct_image_pca(image_vector, pca_results, n_components):
+    """
+    Reconstruct an image using n principal components
+    """
+    mean_face = pca_results['mean_face']
+    eigenvects = pca_results['eigenvectors']
+    
+    # Center the image
+    centered = image_vector - mean_face
+    
+    # Project onto principal components
+    coefficients = centered @ eigenvects[:, :n_components]
+    
+    # Reconstruct
+    reconstructed = mean_face + coefficients @ eigenvects[:, :n_components].T
+    
+    return reconstructed
+
+
+def demonstrate_reconstruction(pca_results, image_matrix, n_samples=3, 
+                              component_counts=[10, 50, 100, 200]):
+    """
+    Demonstrate image reconstruction with different numbers of components
+    """
+    img_size = pca_results['img_size']
+    
+    # Select random samples
+    indices = random.sample(range(len(image_matrix)), min(n_samples, len(image_matrix)))
+    
+    for idx in indices:
+        original = image_matrix[idx]
+        
+        fig, axes = plt.subplots(1, len(component_counts) + 1, figsize=(15, 3))
+        
+        # Original image
+        axes[0].imshow(original.reshape(img_size, img_size), cmap='gray')
+        axes[0].set_title('Original')
+        axes[0].axis('off')
+        
+        # Reconstructions
+        for i, n_comp in enumerate(component_counts):
+            reconstructed = reconstruct_image_pca(original, pca_results, n_comp)
+            axes[i + 1].imshow(reconstructed.reshape(img_size, img_size), cmap='gray')
+            axes[i + 1].set_title(f'{n_comp} components')
+            axes[i + 1].axis('off')
+        
+        plt.suptitle(f'Image Reconstruction with Different PC Counts (Sample {idx})')
+        plt.tight_layout()
+        plt.show()
+
 
 """
 basic cnn for mri classification
@@ -390,16 +648,254 @@ def test_model(model, test_loader):
     print(f'test accuracy: {100 * correct / total:.1f}%')
     return 100 * correct / total
 
-# quick model test
+"""
+GradCAM Implementation
+"""
+
+import cv2
+import matplotlib.patches as patches
+
+class GradCAM:
+    def __init__(self, model, target_layer):
+        self.model = model
+        self.target_layer = target_layer
+        self.gradients = None
+        self.activations = None
+        
+        # Hook into the target layer
+        self.hook_layers()
+    
+    def hook_layers(self):
+        def forward_hook(module, input, output):
+            self.activations = output.detach()
+        
+        def backward_hook(module, grad_input, grad_output):
+            self.gradients = grad_output[0].detach()
+        
+        self.target_layer.register_forward_hook(forward_hook)
+        self.target_layer.register_full_backward_hook(backward_hook)
+    
+    def generate_cam(self, input_tensor, target_class=None):
+        device = next(self.model.parameters()).device
+        self.model.eval()
+        
+        # Forward pass
+        output = self.model(input_tensor)
+        
+        if target_class is None:
+            target_class = torch.argmax(output, dim=1).item()
+        
+        # Zero gradients, backward pass for target class
+        self.model.zero_grad()
+        one_hot_output = torch.zeros_like(output)
+        one_hot_output[0][target_class] = 1
+        output.backward(gradient=one_hot_output, retain_graph=True)
+        
+        # Get gradients and activations
+        gradients = self.gradients.cpu().numpy()[0]
+        activations = self.activations.cpu().numpy()[0]
+        
+        # Pool gradients and generate CAM
+        weights = np.mean(gradients, axis=(1, 2))
+        cam = np.zeros(activations.shape[1:], dtype=np.float32)
+        
+        for i, w in enumerate(weights):
+            cam += w * activations[i]
+        
+        # ReLU and normalize
+        cam = np.maximum(cam, 0)
+        cam = cv2.resize(cam, (input_tensor.shape[2], input_tensor.shape[3]))
+        cam = cam - np.min(cam)
+        if np.max(cam) > 0:
+            cam = cam / np.max(cam)
+        
+        return cam, target_class
+
+def plot_gradcam(model, image_tensor, original_image, target_layer, target_class=None):
+    """
+    Generate and plot GradCAM heatmap
+    
+    Args:
+        model: Trained model
+        image_tensor: Input tensor (batch size 1)
+        original_image: Original PIL image for display
+        target_layer: Which layer to use for GradCAM
+        target_class: Optional target class (if None, uses predicted class)
+    """
+    # Generate CAM
+    gradcam = GradCAM(model, target_layer)
+    cam, predicted_class = gradcam.generate_cam(image_tensor, target_class)
+    
+    # Prepare images
+    original_img = np.array(original_image)
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    heatmap = cv2.resize(heatmap, (original_img.shape[1], original_img.shape[0]))
+    
+    # Overlay heatmap on original image
+    alpha = 0.5
+    overlayed_img = np.uint8(original_img * alpha + heatmap * (1 - alpha))
+    
+    # Create figure
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Original image
+    axes[0].imshow(original_img)
+    axes[0].set_title('Original Image')
+    axes[0].axis('off')
+    
+    # Heatmap
+    axes[1].imshow(heatmap)
+    axes[1].set_title('GradCAM Heatmap')
+    axes[1].axis('off')
+    
+    # Overlay
+    axes[2].imshow(overlayed_img)
+    axes[2].set_title(f'Overlay (Predicted: {"Tumor" if predicted_class == 1 else "Healthy"})')
+    axes[2].axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return cam, predicted_class
+
+def visualize_gradcam_for_samples(model, data_dict, num_samples=3):
+    """
+    Visualize GradCAM for random samples from the test set
+    
+    Args:
+        model: Trained model
+        data_dict: Data dictionary containing test images
+        num_samples: Number of samples to visualize
+    """
+    device = next(model.parameters()).device
+    model.eval()
+    
+    # Get test images
+    test_images = data_dict['test']['images']
+    test_labels = data_dict['test']['labels']
+    
+    # Choose random samples
+    indices = random.sample(range(len(test_images)), min(num_samples, len(test_images)))
+    
+    # Create transform for preprocessing
+    transform = make_transforms(img_size=224, augment=False)
+    
+    # Use the last convolutional layer as target
+    target_layer = model.conv6  # Last convolutional layer
+    
+    for idx in indices:
+        print(f"\nSample {idx}:")
+        print(f"True label: {'Tumor' if test_labels[idx] == 1 else 'Healthy'}")
+        
+        try:
+            # Load and process image
+            img_path = test_images[idx]
+            original_img = Image.open(img_path).convert('RGB')
+            input_tensor = transform(original_img).unsqueeze(0).to(device)
+            
+            # Get prediction
+            with torch.no_grad():
+                output = model(input_tensor)
+                prediction = torch.argmax(output, dim=1).item()
+                probabilities = torch.softmax(output, dim=1)
+            
+            print(f"Predicted: {'Tumor' if prediction == 1 else 'Healthy'}")
+            print(f"Confidence: Tumor={probabilities[0][1]:.3f}, Healthy={probabilities[0][0]:.3f}")
+            
+            # Generate and plot GradCAM
+            cam, predicted_class = plot_gradcam(
+                model, input_tensor, original_img, target_layer
+            )
+            
+        except Exception as e:
+            print(f"Error processing image {img_path}: {e}")
+            continue
+
+
 if __name__ == "__main__":
-    #This is the personal data path
-    data_path_personal = r"/content/gdrive/MyDrive/COMP576/final_project/data/Brain_Tumor_Detection"
-    # load data
+    # This is the personal data path
+    data_path_personal = r"C:\Users\mclai\Documents\codeprojects\deeplearning\final_project\Final_Project_DL\data\Brain_Tumor_Detection"
+    
+    # Load data
+    print("="*70)
+    print("LOADING DATA")
+    print("="*70)
     data = load_mri_data(data_path_personal)
+    
+    # ===================================================================
+    # PCA ANALYSIS SECTION
+    # ===================================================================
+    print("\n" + "="*70)
+    print("STARTING PCA DIMENSIONALITY REDUCTION ANALYSIS")
+    print("="*70)
+    
+    # Load images as matrix (using smaller size for PCA efficiency)
+    # You can adjust img_size and max_images as needed
+    image_matrix, labels = load_images_as_matrix(
+        data, 
+        img_size=64,  # Smaller for faster computation
+        max_images=200,  # Use subset for faster analysis, or None for all
+        grayscale=True
+    )
+    
+    # Perform PCA analysis
+    pca_results = perform_pca_analysis(image_matrix, img_size=64)
+    
+    # Plot eigenvalue spectrum and variance explained
+    plot_pca_results(pca_results, save_path='mri_pca_eigenvalues.png')
+    
+    # Plot eigenfaces (principal components)
+    plot_eigenfaces(pca_results, n_components=19, save_path='mri_eigenfaces.png')
+    
+    # Demonstrate reconstruction with different numbers of components
+    print("\n" + "="*70)
+    print("DEMONSTRATING IMAGE RECONSTRUCTION")
+    print("="*70)
+    demonstrate_reconstruction(
+        pca_results, 
+        image_matrix, 
+        n_samples=3,
+        component_counts=[10, 30, 50, 100]
+    )
+    
+    # ===================================================================
+    # CNN TRAINING SECTION
+    # ===================================================================
+    print("\n" + "="*70)
+    print("STARTING CNN TRAINING")
+    print("="*70)
+    
     loaders = create_loaders(data, batch_size=10)
+    
+    # Create and train model
     model = SimpleBrainCNN()
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"total params here: {total_params}")
+    print(f"Total parameters: {total_params}")
     
     trained_model = train_model(model, loaders['train'], loaders['val'], epochs=11)
+    
+    # Test model
     test_model(trained_model, loaders['test'])
+    
+    # ===================================================================
+    # GRADCAM VISUALIZATION SECTION
+    # ===================================================================
+    print("\n" + "="*70)
+    print("Generating GradCAM Visualizations...")
+    print("="*70)
+    
+    visualize_gradcam_for_samples(trained_model, data, num_samples=3)
+    
+    print("\n" + "="*70)
+    print("ANALYSIS COMPLETE")
+    print("="*70)
+    print("Generated files:")
+    print("  - mri_pca_eigenvalues.png")
+    print("  - mri_eigenfaces.png")
+    print("\nFor more detailed analysis, you can:")
+    print("1. Adjust PCA parameters (img_size, max_images)")
+    print("2. Manually select specific images to analyze")
+    print("3. Compare GradCAM for correct vs incorrect predictions")
+    print("4. Analyze multiple layers to see feature evolution")
+    print("="*70)
