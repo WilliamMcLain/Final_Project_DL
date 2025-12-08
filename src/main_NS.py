@@ -263,22 +263,9 @@ def check_stats(data_dict):
 PCA Dimensionality Reduction Analysis for Brain MRI Images
 """
 
+#Method loads images within a matrix setting
 def load_images_as_matrix(data_dict, img_size=64, max_images=None, grayscale=True):
-    """
-    Load images and convert to matrix format for PCA
-    Each row is a flattened image
-    
-    Args:
-        data_dict: Data dictionary from load_mri_data
-        img_size: Size to resize images to (creates square images)
-        max_images: Maximum number of images to load (None = all)
-        grayscale: Convert to grayscale (recommended for PCA)
-    
-    Returns:
-        image_matrix: (n_images, n_pixels) matrix
-        labels: corresponding labels
-    """
-    print(f"\nLoading images for PCA analysis (size={img_size}x{img_size})...")
+    print(f"\nLoading PCA Images (size={img_size}x{img_size})...")
     
     imgs = data_dict['train']['images']
     lbls = data_dict['train']['labels']
@@ -288,19 +275,19 @@ def load_images_as_matrix(data_dict, img_size=64, max_images=None, grayscale=Tru
     else:
         n_imgs = len(imgs)
     
-    # Calculate matrix size
+    # Calculate matrix n x m
     n_pixels = img_size * img_size
     if not grayscale:
-        n_pixels *= 3  # RGB channels
+        n_pixels *= 3  # 3 rgb chan
     
-    image_matrix = np.zeros((n_imgs, n_pixels))
+    image_m = np.zeros((n_imgs, n_pixels))
     labels = []
     
     for i in range(n_imgs):
         try:
             img = Image.open(imgs[i])
             
-            # Convert to grayscale if requested
+            # If method grey conditional
             if grayscale:
                 img = img.convert('L')
             else:
@@ -311,48 +298,35 @@ def load_images_as_matrix(data_dict, img_size=64, max_images=None, grayscale=Tru
             
             # Flatten and store
             img_array = np.array(img).flatten()
-            image_matrix[i] = img_array
+            image_m[i] = img_array
             labels.append(lbls[i])
             
             if (i + 1) % 50 == 0:
-                print(f"Loaded {i + 1}/{n_imgs} images")
-        except Exception as e:
-            print(f"Error loading image {i}: {e}")
+                print(f"Loaded {i + 1}/{n_imgs}")
+        except Exception as e: #error handling here
+            print(f"Error loading= {i}: {e}")
             continue
     
-    print(f"Final matrix shape: {image_matrix.shape}")
-    return image_matrix, np.array(labels)
+    print(f"Final matrix, shape here: {image_m.shape}")
+    return image_m, np.array(labels)
 
 
+#performing PCA analysis  here
 def perform_pca_analysis(image_matrix, img_size=64):
-    """
-    Perform PCA analysis on image matrix
-    
-    Args:
-        image_matrix: (n_images, n_pixels) matrix
-        img_size: Original image size for reshaping
-    
-    Returns:
-        Dictionary with PCA results
-    """
-    print("\n" + "="*70)
-    print("PERFORMING PCA ANALYSIS")
-    print("="*70)
-    
+
     num_images, num_pixels = image_matrix.shape
     print(f"Analyzing {num_images} images with {num_pixels} pixels each")
     
-    # Compute mean face
-    print("Computing mean image...")
+    #Mean brain
+    print("Computing mean brain cranium mri image...")
     mean_face = np.mean(image_matrix, axis=0)
     centered_faces = image_matrix - mean_face
     
-    # Compute covariance matrix
+    #Compute cov matrix
     print("Computing covariance matrix...")
     cov_matrix = (centered_faces.T @ centered_faces) / (num_images - 1)
-    
-    # Compute eigenvalues and eigenvectors
-    print("Computing eigenvalues and eigenvectors...")
+    #eigens
+    print("Computing eigen and eigenvectors...")
     eigenval, eigenvects = np.linalg.eigh(cov_matrix)
     
     # Sort in descending order
