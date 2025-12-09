@@ -427,7 +427,7 @@ def test_model(model, test_loader):
 #%% quick model test
 if __name__ == "__main__":
     # This is the personal data path
-    data_path_personal = r"/Users/lf55/PycharmProjects/576Final/Final_Project_DL-main/data/Brain_Tumor_Detection"
+    data_path_personal = "/Users/michaelzhang/Documents/GitHub/Final_Project_DL/data/Brain_Tumor_Detection/"
     # load data
     data = load_mri_data(data_path_personal)
     loaders = create_loaders(data, batch_size=10)
@@ -435,6 +435,6 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     print(f"total params here: {total_params}")
 
-    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=21)
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=1)
     test_model(trained_model, loaders['test'])
 

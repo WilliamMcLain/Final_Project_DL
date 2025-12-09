@@ -119,7 +119,7 @@ def load_mri_data(data_folder, test_size=0.15, val_size=0.15):
     }
 
 
-def make_transforms(img_size=224, augment=False):
+def make_transforms(img_size=224, augment=True):
     # make image transforms
     if augment:
         # training with aug
