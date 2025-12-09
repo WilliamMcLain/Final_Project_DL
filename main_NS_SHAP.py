@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from pathlib import Path
 import random
+import shap
 
 # torch stuff
 import torch
@@ -268,47 +269,51 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SimpleBrainCNN(nn.Module):
-    def __init__(self):
-        super().__init__()
-        # first conv block
-        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
-        self.conv2 = nn.Conv2d(16, 16, 3, padding=1)
-        
-        # second conv block  
-        self.conv3 = nn.Conv2d(16, 32, 3, padding=1)
-        self.conv4 = nn.Conv2d(32, 32, 3, padding=1)
-        
-        # third conv block
-        self.conv5 = nn.Conv2d(32, 64, 3, padding=1)
-        self.conv6 = nn.Conv2d(64, 64, 3, padding=1)
-        
-        # fully connected
-        self.fc1 = nn.Linear(64 * 28 * 28, 128)  # 224/2/2/2 = 28
-        self.fc2 = nn.Linear(128, 2)
-        
-        self.pool = nn.MaxPool2d(2, 2)
-        
+    def __init__(self, num_classes: int = 2):
+        super(SimpleBrainCNN, self).__init__()
+
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
+        self.bn1   = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
+        self.bn2   = nn.BatchNorm2d(16)
+
+        self.conv3 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.bn3   = nn.BatchNorm2d(32)
+        self.conv4 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.bn4   = nn.BatchNorm2d(32)
+
+        self.conv5 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn5   = nn.BatchNorm2d(64)
+        self.conv6 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.bn6   = nn.BatchNorm2d(64)
+
+        # pooling + classifier
+        self.pool   = nn.MaxPool2d(2, 2)
+        self.gap    = nn.AdaptiveAvgPool2d(1)  
+        self.dropout = nn.Dropout(p=0.3)
+        self.fc     = nn.Linear(64, num_classes)
+
     def forward(self, x):
-        # block 1
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
+        # Block 1
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
         x = self.pool(x)
-        
-        # block 2
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
+
+        # Block 2
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.relu(self.bn4(self.conv4(x)))
         x = self.pool(x)
-        
-        # block 3
-        x = F.relu(self.conv5(x))
-        x = F.relu(self.conv6(x))
+
+        # Block 3
+        x = F.relu(self.bn5(self.conv5(x)))
+        x = F.relu(self.bn6(self.conv6(x)))
         x = self.pool(x)
-        
-        # classifier
-        x = x.view(-1, 64 * 28 * 28)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        
+
+        # GAP + classifier
+        x = self.gap(x) 
+        x = torch.flatten(x, 1) 
+        x = self.dropout(x)
+        x = self.fc(x) 
         return x
 
 # training function
@@ -319,7 +324,7 @@ def train_model(model, train_loader, val_loader, epochs=11):
     
     # loss and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
     
     # training loop
     for epoch in range(epochs):
@@ -372,7 +377,7 @@ def train_model(model, train_loader, val_loader, epochs=11):
 def test_model(model, test_loader):
     device = next(model.parameters()).device
     model.eval()
-    
+
     correct = 0
     total = 0
     with torch.no_grad():
@@ -386,10 +391,85 @@ def test_model(model, test_loader):
     print(f'test accuracy: {100 * correct / total:.1f}%')
     return 100 * correct / total
 
+def predict_fn(IMAGES_NP: np.ndarray, MODEL, DEVICE) -> np.ndarray:
+        """
+        Forward pass wrapper for SHAP that converts NumPy images into
+        PyTorch tensors and return class probabilities
+
+        :param IMAGES_NP: Input images as NumPy array of shape (N, H, W, 3)
+        :param MODEL: Trained binary classification model
+        :param DEVICE: Device on which inference is performed
+
+        :return: Model probabilities of shape (N, num_classes)
+        """
+
+        # Converts images fron NumPy to Tensor
+        images_tensor = torch.tensor(
+            # Rearrange (N, H, W, 3)
+            IMAGES_NP.transpose(0,3,1,2), 
+            dtype=torch.float32
+        ).to(DEVICE)
+
+        with torch.no_grad():
+            probs = F.softmax(MODEL(images_tensor), dim=1)
+
+        return probs.cpu().numpy()
+
+def run_shap(TRAINED_MODEL, IMAGE_PATHS) -> None:
+    """
+    Runs SHAP on the trained model to display heatmaps. 
+    
+    :param TRAINED_MODEL: Trained binary classification model
+    :param IMAGE_PATHS: Input images as NumPy array of shape (N, H, W, 3)
+
+    :return: None. Only generates the SHAP image plot
+    """
+
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+
+    TRAINED_MODEL.eval()
+
+    images_to_explain: list = []
+    for image_path in IMAGE_PATHS:
+        # Forces the image into Red, Green, Blue format
+        img = Image.open(image_path).convert('RGB').resize((224,224))
+        # Normalize pixel values
+        img_np = np.array(img) / 255.0
+
+        images_to_explain.append(img_np)
+
+    # Convert list to NumPy batch
+    images_to_explain = np.array(images_to_explain) # Data shape = (N, 224, 224, 3)
+
+    # Creates image masker to blur unimportant parts of the image
+    masker = shap.maskers.Image("blur(64,64)", images_to_explain[0].shape)
+
+    # Calculates prediction probabilities
+    explainer = shap.Explainer(
+        # Model prediction function
+        lambda x: predict_fn(x, TRAINED_MODEL, device),
+        masker,
+        output_names=['no', 'yes']
+    )
+
+    # Runs explainer to compute the heatmap score for each pixel
+    shap_values = explainer(
+        images_to_explain,
+        max_evals=500,
+        # Only explains the top predicted class
+        outputs=shap.Explanation.argsort.flip[:1]
+    )
+
+    # Visualizes heatma scores
+    shap.image_plot(shap_values)
+
 # quick model test
 if __name__ == "__main__":
     #This is the personal data path
-    data_path_personal = r"C:\Users\mclai\Documents\codeprojects\deeplearning\final_project\Final_Project_DL\data\Brain_Tumor_Detection"
+    data_path_personal = r"/Users/kennethcadungog/Final_Project_DL/data/Brain_Tumor_Detection"
     # load data
     data = load_mri_data(data_path_personal)
     loaders = create_loaders(data, batch_size=10)
@@ -397,5 +477,9 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     print(f"total params here: {total_params}")
     
-    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=11)
+    # epochs = 11
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=1)
     test_model(trained_model, loaders['test'])
+
+    # SHAP
+    run_shap(trained_model, data['test']['images'][:5])
