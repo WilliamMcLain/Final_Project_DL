@@ -14,6 +14,7 @@ from torchvision import transforms
 from torchvision.transforms import functional as TF 
 import warnings
 from sklearn.metrics import precision_recall_curve
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 warnings.filterwarnings('ignore')
 
@@ -541,6 +542,7 @@ def train_model(model, train_loader, val_loader, epochs=11, log_dir=None):
         print(
             f'epoch: {epoch + 1}, loss: {running_loss / len(train_loader):.3f}, train acc: {acc:.1f}%, val acc: {val_acc:.1f}%')
         epoch_loss = running_loss / len(train_loader)
+        val_loss = val_loss/len(val_loader)
 
 
         writer.add_scalar("Loss/train_epoch", epoch_loss, epoch)
@@ -619,15 +621,15 @@ def plot_pr_with_f(model, testloader, device):
 
     # Draw F1 and F2 Contours
     CS_f1 = plt.contour(R, P, F1, levels=np.linspace(0.1, 0.9, 9),
-                        colors='green', linestyles='--', alpha=0.4)
+                        colors='#419D78', linestyles='--', alpha=0.4)
     plt.clabel(CS_f1, inline=True, fontsize=9, fmt='F1=%.1f')
 
     CS_f2 = plt.contour(R, P, F2, levels=np.linspace(0.1, 0.9, 9),
-                        colors='blue', linestyles=':', alpha=0.4)
+                        colors='#9063CD', linestyles=':', alpha=0.4)
     plt.clabel(CS_f2, inline=True, fontsize=9, fmt='F2=%.1f')
 
     # Draw Model Performance
-    plt.plot(recall, precision, color='black', lw=3, label='Model Performance')
+    plt.plot(recall, precision, color='#2D2926', lw=3, label='Model Performance')
 
 
     f1_score = 2*recall*precision/(recall+precision)
@@ -640,9 +642,9 @@ def plot_pr_with_f(model, testloader, device):
     best_f2_pt = (recall[ix_f2], precision[ix_f2])
 
 
-    plt.scatter(best_f1_pt[0], best_f1_pt[1], s=200, marker='*', color='green', 
+    plt.scatter(best_f1_pt[0], best_f1_pt[1], s=200, marker='*', color='#419D78', 
                 label=f'Best F1 ({f1_score[ix_f1]:.2f})', zorder=5)
-    plt.scatter(best_f2_pt[0], best_f2_pt[1], s=100, marker='o', color='blue', 
+    plt.scatter(best_f2_pt[0], best_f2_pt[1], s=100, marker='o', color='#9063CD', 
                 label=f'Best F2 ({f2_score[ix_f2]:.2f})', zorder=5)
     
     # Formatting
@@ -653,9 +655,70 @@ def plot_pr_with_f(model, testloader, device):
     plt.grid(True, alpha=0.2)
     plt.xlim([0, 1.01])
     plt.ylim([0, 1.01])
-
-    plt.show()
+    
     plt.savefig('PR_curve.png')
+    plt.show()
+
+def extract_scalar(ea, tag):
+    """Extracts steps and values for a specific tag."""
+    if tag in ea.Tags()['scalars']:
+        events = ea.Scalars(tag)
+        steps = [e.step for e in events]
+        values = [e.value for e in events]
+        return steps, values
+    else:
+        print(f"Warning: Tag '{tag}' not found in log.")
+        return [], []
+    
+def plot_performance(log_dir, tags):
+    
+    event_folders = [f for f in os.listdir(log_dir)]
+
+    path = os.path.join(log_dir, event_folders[-1])
+    event_file = [f for f in os.listdir(path)]
+    event_file_path = os.path.join(path, event_file[0])
+
+    print(f"Loading data from: {path}")
+
+    # Load Data
+    ea = EventAccumulator(event_file_path)
+    ea.Reload()
+
+    # Extract Data
+    t_loss_x, t_loss_y = extract_scalar(ea, tags['train_loss'])
+    v_loss_x, v_loss_y = extract_scalar(ea, tags['val_loss'])
+    
+    t_acc_x, t_acc_y = extract_scalar(ea, tags['train_acc'])
+    v_acc_x, v_acc_y = extract_scalar(ea, tags['val_acc'])
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6))
+
+    # Plot 1: Loss
+    if t_loss_x: ax1.plot(t_loss_x, t_loss_y, label='Training Loss', color='#244F96')
+    if v_loss_x: ax1.plot(v_loss_x, v_loss_y, label='Validation Loss', color='#FE5D65', linewidth=2)
+    ax1.set_title('Loss Curve', fontsize=16)
+    ax1.set_xlabel('Epochs / Steps')
+    ax1.set_ylabel('Loss')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Accuracy
+    if t_acc_x: ax2.plot(t_acc_x, t_acc_y, label='Training Accuracy', color='#8668AD')
+    if v_acc_x: ax2.plot(v_acc_x, v_acc_y, label='Validation Accuracy', color='#00A581', linewidth=2)
+    ax2.set_title('Accuracy Curve', fontsize=16)
+    ax2.set_xlabel('Epochs / Steps')
+    ax2.set_ylabel('Accuracy')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    
+    # Save the plot
+    save_path = "training_validation_plot.png"
+    plt.savefig(save_path, dpi=300)
+    print(f"\nPlot saved to: {os.path.abspath(save_path)}")
+    plt.show()
+
 
 
 if __name__ == "__main__":
@@ -668,9 +731,21 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     print(f"total params here: {total_params}")
 
-    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=1)
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=2)
     test_model(trained_model, loaders['test'])
+    
+    #plotting statistics
+    log_dir = "runs/brain_cnn"
+
+    tags = {
+    'train_loss': 'Loss/train_epoch',
+    'val_loss':   'Loss/val_epoch',
+    'train_acc':  'Accuracy/train',
+    'val_acc':    'Accuracy/val'
+            }
+    
     plot_pr_with_f(model, loaders['test'], 'cpu')
+    plot_performance(log_dir, tags)
 
     gradcam_dir = os.path.join(data_path_personal, "gradcam_out") 
     #run_gradcam_on_loader(trained_model, loaders["test"], gradcam_dir)
