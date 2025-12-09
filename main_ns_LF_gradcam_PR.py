@@ -662,7 +662,7 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     print(f"total params here: {total_params}")
 
-    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=1)
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=21)
     test_model(trained_model, loaders['test'])
     plot_pr_with_f(model, loaders['test'], 'cpu')
 
