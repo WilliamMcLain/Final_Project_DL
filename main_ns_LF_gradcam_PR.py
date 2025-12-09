@@ -522,6 +522,7 @@ def train_model(model, train_loader, val_loader, epochs=11, log_dir=None):
         # val set 0
         val_corr = 0
         val_total = 0
+        val_loss = 0
         with torch.no_grad():
             for imgs, labels in val_loader:
                 imgs, labels = imgs.to(device), labels.to(device)
@@ -530,15 +531,22 @@ def train_model(model, train_loader, val_loader, epochs=11, log_dir=None):
                 val_total += labels.size(0)
                 val_corr += (predicted == labels).sum().item()
 
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+
         acc = 100 * correct / total
         val_acc = 100 * val_corr / val_total
+
+
         print(
             f'epoch: {epoch + 1}, loss: {running_loss / len(train_loader):.3f}, train acc: {acc:.1f}%, val acc: {val_acc:.1f}%')
         epoch_loss = running_loss / len(train_loader)
 
+
         writer.add_scalar("Loss/train_epoch", epoch_loss, epoch)
         writer.add_scalar("Accuracy/train", acc, epoch)
         writer.add_scalar("Accuracy/val", val_acc, epoch)
+        writer.add_scalar("Loss/val_epoch",val_loss, epoch)
 
         for name, param in model.named_parameters():
             writer.add_histogram(f"Params/{name}", param.data.cpu().numpy(), epoch)
@@ -570,14 +578,7 @@ def test_model(model, test_loader):
 
 
 def plot_pr_with_f(model, testloader, device):
-    """
-    Evaluates a PyTorch model on a testloader and plots PR curve with F1/F2 contours.
 
-    Args:
-        model: Trained PyTorch model.
-        testloader: PyTorch DataLoader containing (inputs, labels).
-        device: 'cuda' or 'cpu'.
-    """
     model.eval()
     model.to(device)
 
@@ -589,16 +590,11 @@ def plot_pr_with_f(model, testloader, device):
         for inputs, labels in testloader:
             inputs = inputs.to(device)
 
-            # Get model outputs (Logits)
+            # Get outputs
             outputs = model(inputs)
 
             # Convert Logits to Probabilities
-            # CASE A: If your model outputs 2 classes (Binary Cross Entropy usually)
-            # We apply Softmax and take the probability of class 1
             probs = F.softmax(outputs, dim=1)[:, 1]
-
-            # CASE B: If your model outputs 1 single neuron (Sigmoid)
-            # probs = torch.sigmoid(outputs).squeeze()
 
             # Store results
             y_probs_list.extend(probs.cpu().numpy())
@@ -607,33 +603,25 @@ def plot_pr_with_f(model, testloader, device):
     y_true = np.array(y_true_list)
     y_scores = np.array(y_probs_list)
 
-    # --- 2. Calculate Precision-Recall Curve ---
+
     precision, recall, _ = precision_recall_curve(y_true, y_scores)
 
-    # --- 3. Setup Meshgrid for Contours ---
     plt.figure(figsize=(10, 8))
 
-    # Create grid (start from 0.01 to avoid division by zero)
+    # Create grid 
     p_vals = np.linspace(0.01, 1, 100)
     r_vals = np.linspace(0.01, 1, 100)
     P, R = np.meshgrid(p_vals, r_vals)
 
-    # --- 4. Calculate F-Score Surfaces ---
-    # F1 Score (Beta = 1)
+
     F1 = 2 * (P * R) / (P + R)
+    F2 = 5 * (P * R) / ((4 * P) + R)
 
-    # F2 Score (Beta = 2, Recall is weighted higher)
-    beta_f2 = 2
-    F2 = (1 + beta_f2 ** 2) * (P * R) / ((beta_f2 ** 2 * P) + R)
-
-    # --- 5. Plot Contours & Curve ---
-
-    # Draw F1 Contours (Green Dashed)
+    # Draw F1 and F2 Contours
     CS_f1 = plt.contour(R, P, F1, levels=np.linspace(0.1, 0.9, 9),
                         colors='green', linestyles='--', alpha=0.4)
     plt.clabel(CS_f1, inline=True, fontsize=9, fmt='F1=%.1f')
 
-    # Draw F2 Contours (Blue Dotted)
     CS_f2 = plt.contour(R, P, F2, levels=np.linspace(0.1, 0.9, 9),
                         colors='blue', linestyles=':', alpha=0.4)
     plt.clabel(CS_f2, inline=True, fontsize=9, fmt='F2=%.1f')
@@ -641,8 +629,24 @@ def plot_pr_with_f(model, testloader, device):
     # Draw Model Performance
     plt.plot(recall, precision, color='black', lw=3, label='Model Performance')
 
+
+    f1_score = 2*recall*precision/(recall+precision)
+    f2_score = 5*recall*precision/(4*precision+recall)
+
+    ix_f1 = np.argmax(f1_score)
+    ix_f2 = np.argmax(f2_score)
+
+    best_f1_pt = (recall[ix_f1], precision[ix_f1])
+    best_f2_pt = (recall[ix_f2], precision[ix_f2])
+
+
+    plt.scatter(best_f1_pt[0], best_f1_pt[1], s=200, marker='*', color='green', 
+                label=f'Best F1 ({f1_score[ix_f1]:.2f})', zorder=5)
+    plt.scatter(best_f2_pt[0], best_f2_pt[1], s=100, marker='o', color='blue', 
+                label=f'Best F2 ({f2_score[ix_f2]:.2f})', zorder=5)
+    
     # Formatting
-    plt.title(f'Precision-Recall Curve (F1 & F2 Iso-lines)', fontsize=16)
+    plt.title(f'Precision-Recall Curve (F1 & F2 Contours)', fontsize=16)
     plt.xlabel('Recall', fontsize=12)
     plt.ylabel('Precision', fontsize=12)
     plt.legend(loc='lower left')
@@ -651,10 +655,12 @@ def plot_pr_with_f(model, testloader, device):
     plt.ylim([0, 1.01])
 
     plt.show()
+    plt.savefig('PR_curve.png')
+
 
 if __name__ == "__main__":
     # This is the personal data path
-    data_path_personal = "/Users/michaelzhang/Documents/GitHub/Final_Project_DL/data"
+    data_path_personal = r"C:/Users/m1875/OneDrive/Documents/GitHub/Final_Project_DL/data/Brain_Tumor_Detection"
     # load data
     data = load_mri_data(data_path_personal)
     loaders = create_loaders(data, batch_size=10)
@@ -662,7 +668,7 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     print(f"total params here: {total_params}")
 
-    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=21)
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=1)
     test_model(trained_model, loaders['test'])
     plot_pr_with_f(model, loaders['test'], 'cpu')
 
