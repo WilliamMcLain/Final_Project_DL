@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision.transforms import functional as TF 
 import warnings
+from sklearn.metrics import precision_recall_curve
 
 warnings.filterwarnings('ignore')
 
@@ -568,9 +569,92 @@ def test_model(model, test_loader):
     return 100 * correct / total
 
 
+def plot_pr_with_f(model, testloader, device):
+    """
+    Evaluates a PyTorch model on a testloader and plots PR curve with F1/F2 contours.
+
+    Args:
+        model: Trained PyTorch model.
+        testloader: PyTorch DataLoader containing (inputs, labels).
+        device: 'cuda' or 'cpu'.
+    """
+    model.eval()
+    model.to(device)
+
+    y_true_list = []
+    y_probs_list = []
+
+    # --- 1. Inference Loop ---
+    with torch.no_grad():
+        for inputs, labels in testloader:
+            inputs = inputs.to(device)
+
+            # Get model outputs (Logits)
+            outputs = model(inputs)
+
+            # Convert Logits to Probabilities
+            # CASE A: If your model outputs 2 classes (Binary Cross Entropy usually)
+            # We apply Softmax and take the probability of class 1
+            probs = F.softmax(outputs, dim=1)[:, 1]
+
+            # CASE B: If your model outputs 1 single neuron (Sigmoid)
+            # probs = torch.sigmoid(outputs).squeeze()
+
+            # Store results
+            y_probs_list.extend(probs.cpu().numpy())
+            y_true_list.extend(labels.numpy())
+
+    y_true = np.array(y_true_list)
+    y_scores = np.array(y_probs_list)
+
+    # --- 2. Calculate Precision-Recall Curve ---
+    precision, recall, _ = precision_recall_curve(y_true, y_scores)
+
+    # --- 3. Setup Meshgrid for Contours ---
+    plt.figure(figsize=(10, 8))
+
+    # Create grid (start from 0.01 to avoid division by zero)
+    p_vals = np.linspace(0.01, 1, 100)
+    r_vals = np.linspace(0.01, 1, 100)
+    P, R = np.meshgrid(p_vals, r_vals)
+
+    # --- 4. Calculate F-Score Surfaces ---
+    # F1 Score (Beta = 1)
+    F1 = 2 * (P * R) / (P + R)
+
+    # F2 Score (Beta = 2, Recall is weighted higher)
+    beta_f2 = 2
+    F2 = (1 + beta_f2 ** 2) * (P * R) / ((beta_f2 ** 2 * P) + R)
+
+    # --- 5. Plot Contours & Curve ---
+
+    # Draw F1 Contours (Green Dashed)
+    CS_f1 = plt.contour(R, P, F1, levels=np.linspace(0.1, 0.9, 9),
+                        colors='green', linestyles='--', alpha=0.4)
+    plt.clabel(CS_f1, inline=True, fontsize=9, fmt='F1=%.1f')
+
+    # Draw F2 Contours (Blue Dotted)
+    CS_f2 = plt.contour(R, P, F2, levels=np.linspace(0.1, 0.9, 9),
+                        colors='blue', linestyles=':', alpha=0.4)
+    plt.clabel(CS_f2, inline=True, fontsize=9, fmt='F2=%.1f')
+
+    # Draw Model Performance
+    plt.plot(recall, precision, color='black', lw=3, label='Model Performance')
+
+    # Formatting
+    plt.title(f'Precision-Recall Curve (F1 & F2 Iso-lines)', fontsize=16)
+    plt.xlabel('Recall', fontsize=12)
+    plt.ylabel('Precision', fontsize=12)
+    plt.legend(loc='lower left')
+    plt.grid(True, alpha=0.2)
+    plt.xlim([0, 1.01])
+    plt.ylim([0, 1.01])
+
+    plt.show()
+
 if __name__ == "__main__":
     # This is the personal data path
-    data_path_personal = r"/content/gdrive/MyDrive/COMP576/final_project/data/Brain_Tumor_Detection"
+    data_path_personal = "/Users/michaelzhang/Documents/GitHub/Final_Project_DL/data"
     # load data
     data = load_mri_data(data_path_personal)
     loaders = create_loaders(data, batch_size=10)
@@ -578,9 +662,10 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     print(f"total params here: {total_params}")
 
-    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=21)
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=1)
     test_model(trained_model, loaders['test'])
+    plot_pr_with_f(model, loaders['test'], 'cpu')
 
     gradcam_dir = os.path.join(data_path_personal, "gradcam_out") 
-    run_gradcam_on_loader(trained_model, loaders["test"], gradcam_dir)
+    #run_gradcam_on_loader(trained_model, loaders["test"], gradcam_dir)
 
