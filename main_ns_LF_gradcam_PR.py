@@ -587,7 +587,6 @@ def plot_pr_with_f(model, testloader, device):
     y_true_list = []
     y_probs_list = []
 
-    # --- 1. Inference Loop ---
     with torch.no_grad():
         for inputs, labels in testloader:
             inputs = inputs.to(device)
@@ -660,15 +659,11 @@ def plot_pr_with_f(model, testloader, device):
     plt.show()
 
 def extract_scalar(ea, tag):
-    """Extracts steps and values for a specific tag."""
     if tag in ea.Tags()['scalars']:
         events = ea.Scalars(tag)
         steps = [e.step for e in events]
         values = [e.value for e in events]
         return steps, values
-    else:
-        print(f"Warning: Tag '{tag}' not found in log.")
-        return [], []
     
 def plot_performance(log_dir, tags):
     
