@@ -316,8 +316,8 @@ class SimpleBrainCNN(nn.Module):
         x = self.pool(x)  # 1/8 spatial
 
         # Global average pooling
-        x = self.gap(x)  # -> [B, 128, 1, 1]
-        x = x.view(x.size(0), -1)  # -> [B, 128]
+        x = self.gap(x) 
+        x = x.view(x.size(0), -1)  
 
         # Classifier
         x = self.dropout(F.relu(self.fc1(x)))
@@ -325,12 +325,7 @@ class SimpleBrainCNN(nn.Module):
         return x
 
 class GradCAM:
-    """
-    Simple Grad-CAM for a single target conv layer.
-    Usage:
-        gradcam = GradCAM(model, model.conv3_2)
-        cam = gradcam.generate(input_tensor)  # input_tensor: [1, C, H, W]
-    """
+    # Grad-CAM for a single target conv layer
     def __init__(self, model, target_layer):
         self.model = model
         self.model.eval()
@@ -339,28 +334,25 @@ class GradCAM:
         self.activations = None
         self.gradients = None
 
-        # forward hook: save feature maps
+        # forward hook
         self.fwd_hook = self.target_layer.register_forward_hook(
             self._save_activations
         )
-        # backward hook: save gradients
+        # backward hook
         self.bwd_hook = self.target_layer.register_backward_hook(
             self._save_gradients
         )
 
     def _save_activations(self, module, inp, out):
-        # out: [B, C, H, W]
+        # [B, C, H, W]
         self.activations = out.detach()
 
     def _save_gradients(self, module, grad_in, grad_out):
-        # grad_out[0]: [B, C, H, W]
+        # [B, C, H, W]
         self.gradients = grad_out[0].detach()
 
     def generate(self, x, class_idx=None):
-        """
-        x: [1, C, H, W] on the same device as the model
-        Returns: cam as a numpy array in [0, 1] with shape [H', W']
-        """
+        # x: [1, C, H, W] on the same device as the model
         self.model.zero_grad()
         out = self.model(x)  # [1, num_classes]
 
@@ -377,7 +369,7 @@ class GradCAM:
         # channel-wise weights
         weights = grads.mean(dim=(1, 2), keepdim=True)  # [C, 1, 1]
 
-        # weighted sum of feature maps
+        # weighted sum
         cam = (weights * acts).sum(dim=0)  # [H', W']
         cam = torch.relu(cam)
 
@@ -399,7 +391,7 @@ def save_gradcam_overlay(input_tensor, cam, out_path):
     out_path: where to write PNG
     """
     # move to CPU, drop batch
-    img_tensor = input_tensor.detach().cpu().squeeze(0)  # [C, H, W]
+    img_tensor = input_tensor.detach().cpu().squeeze(0) 
 
     # if single channel, make it 3-channel
     if img_tensor.size(0) == 1:
@@ -409,7 +401,7 @@ def save_gradcam_overlay(input_tensor, cam, out_path):
     img_tensor = img_tensor.clamp(0, 1)
 
     # convert to PIL
-    base_img = TF.to_pil_image(img_tensor)  # RGB
+    base_img = TF.to_pil_image(img_tensor)
 
     # resize CAM to image size
     cam_img = Image.fromarray((cam * 255).astype(np.uint8)).resize(
@@ -430,10 +422,7 @@ def save_gradcam_overlay(input_tensor, cam, out_path):
 
 
 def run_gradcam_on_loader(model, data_loader, out_dir, device=None):
-    """
-    Run Grad-CAM on every image in data_loader and save overlays to out_dir.
-    Filenames will be img_0000_label0.png, etc.
-    """
+    # run Grad-CAM on every image
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -442,7 +431,7 @@ def run_gradcam_on_loader(model, data_loader, out_dir, device=None):
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # Target the last conv layer in SimpleBrainCNN
+    # target last conv layer
     gradcam = GradCAM(model, model.conv3_2)
 
     img_idx = 0
@@ -455,7 +444,6 @@ def run_gradcam_on_loader(model, data_loader, out_dir, device=None):
             x = images[i:i+1]        # keep batch dimension [1, C, H, W]
             y = labels[i].item()
 
-            # default: CAM for the predicted class
             cam = gradcam.generate(x)
 
             out_name = f"img_{img_idx:04d}_label{y}.png"
