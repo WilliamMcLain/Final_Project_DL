@@ -477,8 +477,8 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     print(f"total params here: {total_params}")
     
-    # epochs = 11
-    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=1)
+    # Changed epochs from 1 to 11
+    trained_model = train_model(model, loaders['train'], loaders['val'], epochs=11)
     test_model(trained_model, loaders['test'])
 
     # SHAP
