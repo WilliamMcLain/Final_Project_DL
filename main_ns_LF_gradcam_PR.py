@@ -119,7 +119,7 @@ def load_mri_data(data_folder, test_size=0.15, val_size=0.15):
     }
 
 
-def make_transforms(img_size=224, augment=False):
+def make_transforms(img_size=224, augment=True):
     # make image transforms
     if augment:
         # training with aug
@@ -541,14 +541,15 @@ def train_model(model, train_loader, val_loader, epochs=11, log_dir=None):
 
         print(
             f'epoch: {epoch + 1}, loss: {running_loss / len(train_loader):.3f}, train acc: {acc:.1f}%, val acc: {val_acc:.1f}%')
+
         epoch_loss = running_loss / len(train_loader)
+
         val_loss = val_loss/len(val_loader)
 
-
-        writer.add_scalar("Loss/train_epoch", epoch_loss, epoch)
-        writer.add_scalar("Accuracy/train", acc, epoch)
-        writer.add_scalar("Accuracy/val", val_acc, epoch)
-        writer.add_scalar("Loss/val_epoch",val_loss, epoch)
+        writer.add_scalar('Loss/val_epoch', val_loss, epoch)
+        writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
+        writer.add_scalar('Accuracy/train', acc, epoch)
+        writer.add_scalar('Accuracy/val', val_acc, epoch)
 
         for name, param in model.named_parameters():
             writer.add_histogram(f"Params/{name}", param.data.cpu().numpy(), epoch)
@@ -578,77 +579,74 @@ def test_model(model, test_loader):
     print(f'test accuracy: {100 * correct / total:.1f}%')
     return 100 * correct / total
 
-
-def plot_pr_with_f(model, testloader, device):
+# plot precision recall curve for brain CNN
+# no grad-cam statistics involved in this part
+def plot_pr_with_fscores(model, testloader, device):
 
     model.eval()
     model.to(device)
 
-    y_true_list = []
-    y_probs_list = []
+    label = []
+    probability  = []
 
-    # --- 1. Inference Loop ---
     with torch.no_grad():
         for inputs, labels in testloader:
             inputs = inputs.to(device)
-
-            # Get outputs
             outputs = model(inputs)
 
-            # Convert Logits to Probabilities
-            probs = F.softmax(outputs, dim=1)[:, 1]
+            prob= F.softmax(outputs, dim=1)[:, 1]
 
-            # Store results
-            y_probs_list.extend(probs.cpu().numpy())
-            y_true_list.extend(labels.numpy())
+            probability.extend(prob.cpu().numpy())
+            label.extend(labels.numpy())
 
-    y_true = np.array(y_true_list)
-    y_scores = np.array(y_probs_list)
+    label = np.array(label)
+    probability = np.array(probability)
 
 
-    precision, recall, _ = precision_recall_curve(y_true, y_scores)
+    precision, recall, _ = precision_recall_curve(label, probability)
 
     plt.figure(figsize=(10, 8))
 
-    # Create grid 
-    p_vals = np.linspace(0.01, 1, 100)
-    r_vals = np.linspace(0.01, 1, 100)
-    P, R = np.meshgrid(p_vals, r_vals)
+    # create meshgrid for plotting contours of f1 and f2 score
+    P = np.linspace(0.01, 1, 100)
+    R = np.linspace(0.01, 1, 100)
+    P, R = np.meshgrid(P, R)
 
+    # calcaulting f1 and f2 scores
+    F1_space = 2 * (P * R) / (P + R)
+    F2_space = 5 * (P * R) / ((4 * P) + R)
 
-    F1 = 2 * (P * R) / (P + R)
-    F2 = 5 * (P * R) / ((4 * P) + R)
-
-    # Draw F1 and F2 Contours
-    CS_f1 = plt.contour(R, P, F1, levels=np.linspace(0.1, 0.9, 9),
+    #F1 and F2 Contours
+    f1_contour = plt.contour(R, P, F1_space, levels=np.linspace(0.1, 0.9, 9),
                         colors='#419D78', linestyles='--', alpha=0.4)
-    plt.clabel(CS_f1, inline=True, fontsize=9, fmt='F1=%.1f')
+    plt.clabel(f1_contour, inline=True, fontsize=9, fmt='F1=%.1f')
 
-    CS_f2 = plt.contour(R, P, F2, levels=np.linspace(0.1, 0.9, 9),
+    f2_contour = plt.contour(R, P, F2_space, levels=np.linspace(0.1, 0.9, 9),
                         colors='#9063CD', linestyles=':', alpha=0.4)
-    plt.clabel(CS_f2, inline=True, fontsize=9, fmt='F2=%.1f')
+    plt.clabel(f2_contour, inline=True, fontsize=9, fmt='F2=%.1f')
 
-    # Draw Model Performance
+    #plot model PR curve
     plt.plot(recall, precision, color='#2D2926', lw=3, label='Model Performance')
 
+    # grab the f1 and f2 scores
+    f1_scores = 2*recall*precision/(recall+precision)
+    f2_scores = 5*recall*precision/(4*precision+recall)
+    #get index of best scores
+    f1_index = np.argmax(f1_scores)
+    f2_index = np.argmax(f2_scores)
 
-    f1_score = 2*recall*precision/(recall+precision)
-    f2_score = 5*recall*precision/(4*precision+recall)
+    #find the best scores
+    best_f1 = (recall[f1_index], precision[f1_index])
+    best_f2 = (recall[f2_index], precision[f2_index])
 
-    ix_f1 = np.argmax(f1_score)
-    ix_f2 = np.argmax(f2_score)
+    # plot the best scores
+    plt.scatter(best_f1[0], best_f1[1], s=200, marker='*', color='#419D78',
+                label=f'Best F1 ({f1_scores[f1_index]:.2f})', zorder=5)
+    plt.scatter(best_f2[0], best_f2[1], s=100, marker='o', color='#9063CD',
+                label=f'Best F2 ({f2_scores[f2_index]:.2f})', zorder=5)
 
-    best_f1_pt = (recall[ix_f1], precision[ix_f1])
-    best_f2_pt = (recall[ix_f2], precision[ix_f2])
 
-
-    plt.scatter(best_f1_pt[0], best_f1_pt[1], s=200, marker='*', color='#419D78', 
-                label=f'Best F1 ({f1_score[ix_f1]:.2f})', zorder=5)
-    plt.scatter(best_f2_pt[0], best_f2_pt[1], s=100, marker='o', color='#9063CD', 
-                label=f'Best F2 ({f2_score[ix_f2]:.2f})', zorder=5)
-    
-    # Formatting
-    plt.title(f'Precision-Recall Curve (F1 & F2 Contours)', fontsize=16)
+    plt.title('Precision-Recall Curve (F1 & F2 Contours)', fontsize=16)
     plt.xlabel('Recall', fontsize=12)
     plt.ylabel('Precision', fontsize=12)
     plt.legend(loc='lower left')
@@ -657,73 +655,71 @@ def plot_pr_with_f(model, testloader, device):
     plt.ylim([0, 1.01])
     
     plt.savefig('PR_curve.png')
-    plt.show()
 
-def extract_scalar(ea, tag):
-    """Extracts steps and values for a specific tag."""
-    if tag in ea.Tags()['scalars']:
-        events = ea.Scalars(tag)
-        steps = [e.step for e in events]
-        values = [e.value for e in events]
-        return steps, values
-    else:
-        print(f"Warning: Tag '{tag}' not found in log.")
-        return [], []
+    plt.show()
     
 def plot_performance(log_dir, tags):
-    
-    event_folders = [f for f in os.listdir(log_dir)]
 
-    path = os.path.join(log_dir, event_folders[-1])
-    event_file = [f for f in os.listdir(path)]
-    event_file_path = os.path.join(path, event_file[0])
+    event_folders = [os.path.join(log_dir, f) for f in os.listdir(log_dir)]
+    event_folders.sort(key=os.path.getctime)
 
-    print(f"Loading data from: {path}")
+    path_last_run = event_folders[-1]
+    event_file = [f for f in os.listdir(path_last_run)]
+    event_file = os.path.join(path_last_run, event_file[0])
+
+    print(f"Loading data from: {path_last_run}")
+
 
     # Load Data
-    ea = EventAccumulator(event_file_path)
+    ea = EventAccumulator(event_file)
     ea.Reload()
 
     # Extract Data
-    t_loss_x, t_loss_y = extract_scalar(ea, tags['train_loss'])
-    v_loss_x, v_loss_y = extract_scalar(ea, tags['val_loss'])
+    def extract_data(ea, tag):
+        # find the tags in tensorbaord log
+        event = ea.Scalars(tag)
+        step = [e.step for e in event]
+        value = [e.value for e in event]
+        return step, value
+
+    x_trainingloss, y_trainingloss = extract_data(ea, tags['train_loss'])
+    x_valloss, y_valloss = extract_data(ea, tags['val_loss'])
     
-    t_acc_x, t_acc_y = extract_scalar(ea, tags['train_acc'])
-    v_acc_x, v_acc_y = extract_scalar(ea, tags['val_acc'])
+    x_trainingacc, y_trainingacc = extract_data(ea, tags['train_acc'])
+    x_trainingacc, v_trainingacc = extract_data(ea, tags['val_acc'])
+
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6))
 
-    # Plot 1: Loss
-    if t_loss_x: ax1.plot(t_loss_x+1, t_loss_y, label='Training Loss', color='#244F96')
-    if v_loss_x: ax1.plot(v_loss_x+1, v_loss_y, label='Validation Loss', color='#FE5D65', linewidth=2)
-    ax1.set_title('Loss Curve', fontsize=16)
-    ax1.set_xlabel('Epochs / Steps')
+    #Plot training and validation loss
+    ax1.plot(x_trainingloss, y_trainingloss, label='Training Loss', color='#244F96')
+    ax1.plot(x_valloss, y_valloss, label='Validation Loss', color='#FE5D65')
+    ax1.set_title('Loss across Epochs', fontsize=16)
+    ax1.set_xlabel('Epochs')
     ax1.set_ylabel('Loss')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    # Plot 2: Accuracy
-    if t_acc_x: ax2.plot(t_acc_x+1, t_acc_y, label='Training Accuracy', color='#8668AD')
-    if v_acc_x: ax2.plot(v_acc_x+1, v_acc_y, label='Validation Accuracy', color='#00A581', linewidth=2)
-    ax2.set_title('Accuracy Curve', fontsize=16)
-    ax2.set_xlabel('Epochs / Steps')
+    # Plot training and validation accuracy
+    ax2.plot(x_trainingacc, y_trainingacc, label='Training Accuracy', color='#8668AD')
+    ax2.plot(x_trainingacc, v_trainingacc, label='Validation Accuracy', color='#00A581')
+    ax2.set_title('Accuracy across epochs', fontsize=16)
+    ax2.set_xlabel('Epochs')
     ax2.set_ylabel('Accuracy')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    
-    # Save the plot
-    save_path = "training_validation_plot.png"
-    plt.savefig(save_path, dpi=300)
-    print(f"\nPlot saved to: {os.path.abspath(save_path)}")
+
+    plt.savefig("training_validation_plot.png")
+
     plt.show()
 
 
 
 if __name__ == "__main__":
     # This is the personal data path
-    data_path_personal = r"C:/Users/m1875/OneDrive/Documents/GitHub/Final_Project_DL/data/Brain_Tumor_Detection"
+    data_path_personal = "C:/Users/m1875/OneDrive/Documents/GitHub/Final_Project_DL/data/Brain_Tumor_Detection/"
     # load data
     data = load_mri_data(data_path_personal)
     loaders = create_loaders(data, batch_size=10)
@@ -744,7 +740,7 @@ if __name__ == "__main__":
     'val_acc':    'Accuracy/val'
             }
     
-    plot_pr_with_f(model, loaders['test'], 'cpu')
+    plot_pr_with_fscores(model, loaders['test'], 'cpu')
     plot_performance(log_dir, tags)
 
     gradcam_dir = os.path.join(data_path_personal, "gradcam_out") 
