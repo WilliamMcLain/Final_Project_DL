@@ -694,8 +694,8 @@ def plot_performance(log_dir, tags):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6))
 
     # Plot 1: Loss
-    if t_loss_x: ax1.plot(t_loss_x, t_loss_y, label='Training Loss', color='#244F96')
-    if v_loss_x: ax1.plot(v_loss_x, v_loss_y, label='Validation Loss', color='#FE5D65', linewidth=2)
+    if t_loss_x: ax1.plot(t_loss_x+1, t_loss_y, label='Training Loss', color='#244F96')
+    if v_loss_x: ax1.plot(v_loss_x+1, v_loss_y, label='Validation Loss', color='#FE5D65', linewidth=2)
     ax1.set_title('Loss Curve', fontsize=16)
     ax1.set_xlabel('Epochs / Steps')
     ax1.set_ylabel('Loss')
@@ -703,8 +703,8 @@ def plot_performance(log_dir, tags):
     ax1.grid(True, alpha=0.3)
 
     # Plot 2: Accuracy
-    if t_acc_x: ax2.plot(t_acc_x, t_acc_y, label='Training Accuracy', color='#8668AD')
-    if v_acc_x: ax2.plot(v_acc_x, v_acc_y, label='Validation Accuracy', color='#00A581', linewidth=2)
+    if t_acc_x: ax2.plot(t_acc_x+1, t_acc_y, label='Training Accuracy', color='#8668AD')
+    if v_acc_x: ax2.plot(v_acc_x+1, v_acc_y, label='Validation Accuracy', color='#00A581', linewidth=2)
     ax2.set_title('Accuracy Curve', fontsize=16)
     ax2.set_xlabel('Epochs / Steps')
     ax2.set_ylabel('Accuracy')
